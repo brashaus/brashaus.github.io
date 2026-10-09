@@ -104,14 +104,14 @@ carla2.dispatch({ type: 'answer', text: 'risposta di Carla' });
 host.dispatch({ type: 'answer', text: 'risposta di Anna' });
 await tick(20);
 check(views.b.phase === 'guessing' && views.b.cards.length === 3, 'guessing starts when all answered');
-check(views.b.cards.every((card) => card.mine || card.author === null), 'authors hidden from clients');
+check(views.b.cards.every((card) => card.authors.length === (card.mine ? 1 : 0)), 'authors hidden from clients');
 
-const pick = (view) => Object.fromEntries(view.cards.filter((c) => !c.mine).map((c) => [c.id, view.participants.find((id) => id !== view.me)]));
+const pick = (view) => Object.fromEntries(view.cards.filter((c) => !c.mine).map((c) => [c.id, [view.participants.find((id) => id !== view.me)]]));
 bruno.dispatch({ type: 'submitGuesses', guesses: pick(views.b) });
 carla2.dispatch({ type: 'submitGuesses', guesses: pick(views.c) });
 host.dispatch({ type: 'submitGuesses', guesses: pick(views.host) });
 await tick(20);
-check(views.c.phase === 'results' && views.c.cards.every((card) => card.author), 'results reveal every author');
+check(views.c.phase === 'results' && views.c.cards.every((card) => card.authors.length === card.count), 'results reveal every author');
 const total = views.c.players.reduce((sum, p) => sum + p.score, 0);
 check(total === 6, `3 players x 2 answers each = 6 points handed out (got ${total})`);
 

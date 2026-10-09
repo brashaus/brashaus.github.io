@@ -35,8 +35,12 @@ const ids = (g) => g.s.players.map((p) => p.id);
 function answerAll(g) {
   for (const id of g.s.round.participants) eq(g.handle(id, { type: 'answer', text: `risposta di ${id}` }), {});
 }
-const authorOf = (g, cardId) => g.s.round.cards.find((c) => c.id === cardId).author;
-const cardOf = (g, author) => g.s.round.cards.find((c) => c.author === author).id;
+const cardOf = (g, author) => g.s.round.cards.find((c) => c.authors.includes(author)).id;
+const sorted = (obj) => Object.fromEntries(Object.entries(obj).sort(([x], [y]) => x.localeCompare(y)));
+const viewCard = (v, id) => v.cards.find((c) => c.id === id);
+function answer(g, texts) {
+  for (const [id, text] of Object.entries(texts)) eq(g.handle(id, { type: 'answer', text }), {});
+}
 
 test('needs 3 connected players to start', () => {
   const g = setup('classic', ['Anna', 'Bruno']);
@@ -82,7 +86,7 @@ test('guessing view hides authors except your own', () => {
   answerAll(g);
   const v = g.viewFor('b');
   eq(v.cards.length, 3);
-  for (const c of v.cards) eq(c.author, c.mine ? 'b' : null);
+  for (const c of v.cards) eq(c.authors, c.mine ? ['b'] : []);
 });
 
 test('classic: wrong guess passes turn, right guess scores and continues', () => {
@@ -100,8 +104,8 @@ test('classic: wrong guess passes turn, right guess scores and continues', () =>
   eq(g.s.round.classic.eliminated, ['c']);
   eq(g.s.round.classic.turn, 'b', 'right guess keeps turn');
   const v = g.viewFor('a');
-  eq(v.cards.find((c) => c.id === cardOf(g, 'c')).author, 'c', 'eliminated author revealed');
-  eq(v.cards.find((c) => c.id === cardOf(g, 'b')).author, null);
+  eq(viewCard(v, cardOf(g, 'c')).authors, ['c'], 'eliminated author revealed');
+  eq(viewCard(v, cardOf(g, 'b')).authors, []);
 
   g.handle('b', { type: 'guess', cardId: cardOf(g, 'a'), suspectId: 'a' });
   eq(g.s.phase, 'results');
@@ -126,19 +130,75 @@ test('simultaneous: scoring for guessers and fooling authors', () => {
   const g = setup('simultaneous');
   g.handle('a', { type: 'start' });
   answerAll(g);
-  ok(g.handle('a', { type: 'submitGuesses', guesses: { [cardOf(g, 'b')]: 'b' } }).error, 'incomplete');
+  ok(g.handle('a', { type: 'submitGuesses', guesses: { [cardOf(g, 'b')]: ['b'] } }).error, 'incomplete');
   // a gets both right, b gets both wrong, c gets one right.
-  g.handle('a', { type: 'submitGuesses', guesses: { [cardOf(g, 'b')]: 'b', [cardOf(g, 'c')]: 'c' } });
-  g.handle('b', { type: 'submitGuesses', guesses: { [cardOf(g, 'a')]: 'c', [cardOf(g, 'c')]: 'a' } });
+  g.handle('a', { type: 'submitGuesses', guesses: { [cardOf(g, 'b')]: ['b'], [cardOf(g, 'c')]: ['c'] } });
+  g.handle('b', { type: 'submitGuesses', guesses: { [cardOf(g, 'a')]: ['c'], [cardOf(g, 'c')]: ['a'] } });
   const mid = g.viewFor('c');
   eq(mid.simul.submitted, ['a', 'b']);
   eq(mid.simul.guesses, undefined, 'others guesses hidden');
-  g.handle('c', { type: 'submitGuesses', guesses: { [cardOf(g, 'a')]: 'a', [cardOf(g, 'b')]: 'a' } });
+  g.handle('c', { type: 'submitGuesses', guesses: { [cardOf(g, 'a')]: ['a'], [cardOf(g, 'b')]: ['a'] } });
   eq(g.s.phase, 'results');
   // a: 2 right + fooled b = 3; b: 0 right + fooled c = 1;
   // c: 1 right + fooled b = 2
   eq(g.s.round.deltas, { a: 3, b: 1, c: 2 });
-  eq(g.viewFor('b').cards.every((c) => c.author), true, 'results reveal all');
+  eq(g.viewFor('b').cards.every((c) => c.authors.length === c.count), true, 'results reveal all');
+});
+
+test('answers differing only in case share one card, punctuation keeps them apart', () => {
+  const g = setup('classic', ['Anna', 'Bruno', 'Carla', 'Dario']);
+  g.handle('a', { type: 'start' });
+  answer(g, { a: 'Pizza', b: 'pizza', c: 'pizza!', d: 'Sushi' });
+  eq(g.s.round.cards.length, 3);
+  eq(cardOf(g, 'a'), cardOf(g, 'b'));
+  ok(cardOf(g, 'a') !== cardOf(g, 'c'), 'punctuation matters');
+  const v = g.viewFor('c');
+  const shared = viewCard(v, cardOf(g, 'a'));
+  eq(shared.count, 2, 'everyone sees it was written by 2');
+  eq(shared.authors, [], 'but not by whom');
+  eq(viewCard(g.viewFor('a'), cardOf(g, 'a')).authors, ['a'], 'authors only see themselves');
+  ok(['Pizza', 'pizza'].includes(shared.text));
+});
+
+test('classic: a shared card stays in play until every author is found', () => {
+  const g = setup('classic', ['Anna', 'Bruno', 'Carla', 'Dario']);
+  g.handle('a', { type: 'start' });
+  answer(g, { a: 'mare', b: 'Mare', c: 'monti', d: 'lago' });
+  const shared = cardOf(g, 'b');
+  // a co-wrote the shared card and can still hunt for the other author.
+  eq(g.handle('a', { type: 'guess', cardId: shared, suspectId: 'b' }), {});
+  eq(g.s.round.classic.eliminated, ['b']);
+  eq(g.s.round.classic.turn, 'a', 'right guess keeps the turn');
+  ok(g.handle('a', { type: 'guess', cardId: shared, suspectId: 'c' }).error, 'nothing left to find for a');
+  g.handle('a', { type: 'guess', cardId: cardOf(g, 'c'), suspectId: 'd' });
+  eq(g.s.round.classic.turn, 'c');
+  eq(viewCard(g.viewFor('c'), shared).authors, ['b'], 'only the found author is revealed');
+  eq(g.handle('c', { type: 'guess', cardId: shared, suspectId: 'a' }), {}, 'naming any hidden author counts');
+  eq(viewCard(g.viewFor('d'), shared).authors.sort(), ['a', 'b']);
+  ok(g.handle('c', { type: 'guess', cardId: shared, suspectId: 'd' }).error, 'card fully revealed');
+});
+
+test('simultaneous: shared cards need one name per author and score per author', () => {
+  const g = setup('simultaneous', ['Anna', 'Bruno', 'Carla', 'Dario']);
+  g.handle('a', { type: 'start' });
+  answer(g, { a: 'gatto', b: 'GATTO', c: 'cane', d: 'pesce' });
+  const shared = cardOf(g, 'a');
+  const cane = cardOf(g, 'c');
+  const pesce = cardOf(g, 'd');
+  ok(g.handle('c', { type: 'submitGuesses', guesses: { [shared]: ['a'], [pesce]: ['d'] } }).error, 'needs 2 names');
+  ok(g.handle('c', { type: 'submitGuesses', guesses: { [shared]: ['a', 'a'], [pesce]: ['d'] } }).error, 'names must differ');
+  // a co-wrote the shared card: one name for it (the other author).
+  eq(g.handle('a', { type: 'submitGuesses', guesses: { [shared]: ['b'], [cane]: ['c'], [pesce]: ['d'] } }), {});
+  eq(g.handle('b', { type: 'submitGuesses', guesses: { [shared]: ['c'], [cane]: ['d'], [pesce]: ['a'] } }), {});
+  eq(g.handle('c', { type: 'submitGuesses', guesses: { [shared]: ['a', 'd'], [pesce]: ['b'] } }), {});
+  eq(g.handle('d', { type: 'submitGuesses', guesses: { [shared]: ['a', 'b'], [cane]: ['c'] } }), {});
+  eq(g.s.phase, 'results');
+  // a: found b, c, d (+3), b missed a on the shared card (+1) = 4
+  // b: c missed b on the shared card (+1) = 1
+  // c: found a (+1), b missed cane (+1) = 2
+  // d: found a, b, c (+3), b and c missed pesce (+2) = 5
+  eq(sorted(g.s.round.deltas), { a: 4, b: 1, c: 2, d: 5 });
+  eq(g.s.round.simul.correct[shared], { a: ['c', 'd'], b: ['a', 'd'] });
 });
 
 test('forceAdvance drops players who did not answer', () => {

@@ -29,6 +29,11 @@ UI language: Italian.
     the author is out (their answer is revealed). Wrong: turn passes. Last one standing gets +2.
   - **Simultanea**: everyone matches every answer to an author at once. +1 per right match,
     and the author gets +1 for every player who matched their answer wrong.
+- Identical answers (case-insensitive only; punctuation, accents and wording still count) become one card
+  with several authors. Everyone sees "Scritta da N", not by whom. Naming any hidden author counts as right.
+  - Classica: each right guess reveals one author; the card stays in play until all are found.
+    A co-author may guess on their own shared card.
+  - Simultanea: one name per author (co-authors name the others); scoring is per author as above.
 - Host picks the number of rounds (3/5/8/10). Questions come from `js/questions.js`, no repeats until the deck runs out.
 - Name: Brashaus, an in-joke of ours, don't change it (`APP_NAME` in `js/app.js`, PeerJS id prefix in `js/transport.js`, storage keys `bh.*`).
 

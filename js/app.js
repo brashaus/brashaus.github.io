@@ -425,11 +425,19 @@ function renderAnswering(view, isHost) {
   ];
 }
 
+function joinNames(view, ids) {
+  const names = ids.map((id) => nameOf(view, id));
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} e ${names.at(-1)}`;
+}
+
 function answerCard(view, card, { onclick, selected, meta, extra } = {}) {
-  const revealed = view.phase === 'guessing' && view.classic && card.author && !card.mine;
+  // In classic mode a card is struck through once all of its authors are known (your own solo card excluded).
+  const solved = view.phase === 'guessing' && view.classic && card.authors.length === card.count;
+  const revealed = solved && !(card.mine && card.count === 1);
   const cls = ['answer',
     card.mine && 'mine', revealed && 'revealed', onclick && 'selectable', selected && 'selected'].filter(Boolean).join(' ');
   return h(onclick ? 'button' : 'div', { class: cls, onclick },
+    card.count > 1 && h('span', { class: 'shared' }, `Scritta da ${card.count}`),
     h('span', { class: 'text' }, card.text),
     meta && h('span', { class: 'meta' }, meta),
     extra,
@@ -454,9 +462,14 @@ function renderClassic(view, isHost) {
   const suspects = alive.filter((id) => id !== view.me);
 
   const cards = view.cards.map((card) => {
-    const out = card.author && !card.mine;
-    const meta = card.mine ? 'La tua risposta' : out ? `Era di ${nameOf(view, card.author)}` : null;
-    const pickable = myTurn && !card.mine && !out;
+    const found = card.authors.filter((id) => id !== view.me);
+    const hidden = card.count - card.authors.length;
+    const meta = [
+      card.mine && 'La tua risposta',
+      found.length > 0 && `${card.count > 1 ? 'Di' : 'Era di'} ${joinNames(view, found)}`,
+      card.count > 1 && hidden > 0 && `${hidden} da scoprire`,
+    ].filter(Boolean).join(' · ');
+    const pickable = myTurn && hidden > 0;
     return answerCard(view, card, {
       meta,
       selected: ui.card === card.id,
@@ -508,30 +521,47 @@ function renderSimultaneous(view, isHost) {
   const waitingFor = view.participants.filter((id) => !view.simul.submitted.includes(id));
 
   if (submitted && !ui.editingGuesses && Object.keys(ui.guessDraft).length === 0) {
-    ui.guessDraft = { ...view.simul.myGuesses };
+    ui.guessDraft = JSON.parse(JSON.stringify(view.simul.myGuesses));
   }
 
-  const toGuess = view.cards.filter((c) => !c.mine);
-  const complete = toGuess.every((c) => ui.guessDraft[c.id]);
+  // One name per author, minus yourself if you co-wrote it.
+  const needed = (card) => card.count - (card.mine ? 1 : 0);
+  const draftOf = (card) => ui.guessDraft[card.id] ?? [];
+  const isComplete = (card) => {
+    const picks = draftOf(card).filter(Boolean);
+    return picks.length === needed(card) && new Set(picks).size === picks.length;
+  };
+  const toGuess = view.cards.filter((c) => needed(c) > 0);
+  const incomplete = toGuess.filter((c) => !isComplete(c)).length;
+  const hasRepeats = toGuess.some((c) => {
+    const picks = draftOf(c).filter(Boolean);
+    return new Set(picks).size !== picks.length;
+  });
 
   const cards = view.cards.map((card) => {
-    if (card.mine) return answerCard(view, card, { meta: 'La tua risposta' });
-    if (!editing) {
+    const mineMeta = card.mine && 'La tua risposta';
+    if (!editing || needed(card) === 0) {
       const guess = view.simul.myGuesses?.[card.id];
-      return answerCard(view, card, { meta: guess ? `Hai detto: ${nameOf(view, guess)}` : null });
+      return answerCard(view, card, {
+        meta: [mineMeta, guess && `Hai detto: ${joinNames(view, guess)}`].filter(Boolean).join(' · '),
+      });
     }
-    return answerCard(view, card, {
-      extra: h('select', {
-        key: `guess-${card.id}`,
-        onchange: (e) => { ui.guessDraft[card.id] = e.target.value; render(); },
+    const selects = Array.from({ length: needed(card) }, (_, i) => h('select', {
+      key: `guess-${card.id}-${i}`,
+      onchange: (e) => {
+        const picks = [...draftOf(card)];
+        picks[i] = e.target.value;
+        ui.guessDraft[card.id] = picks;
+        render();
       },
-      h('option', { value: '' }, 'Chi l’ha scritta?'),
-      others.map((id) => {
-        const opt = h('option', { value: id }, nameOf(view, id));
-        opt.selected = ui.guessDraft[card.id] === id;
-        return opt;
-      })),
-    });
+    },
+    h('option', { value: '' }, card.mine ? 'Chi altro l’ha scritta?' : needed(card) > 1 ? `Autore ${i + 1}` : 'Chi l’ha scritta?'),
+    others.map((id) => {
+      const opt = h('option', { value: id }, nameOf(view, id));
+      opt.selected = draftOf(card)[i] === id;
+      return opt;
+    })));
+    return answerCard(view, card, { meta: mineMeta, extra: selects });
   });
 
   return [
@@ -539,9 +569,11 @@ function renderSimultaneous(view, isHost) {
     h('p', { class: 'center' }, editing ? 'Abbina ogni risposta al suo autore.' : 'Ecco le risposte!'),
     h('div', { class: 'answers' }, cards),
     editing && h('button', {
-      class: 'primary big', disabled: !complete,
+      class: 'primary big', disabled: incomplete > 0,
       onclick: () => { ui.editingGuesses = false; dispatch({ type: 'submitGuesses', guesses: ui.guessDraft }); },
-    }, complete ? (submitted ? 'Aggiorna' : 'Invia le mie risposte') : `Mancano ${toGuess.filter((c) => !ui.guessDraft[c.id]).length} abbinamenti`),
+    }, hasRepeats ? 'Sulla stessa risposta servono nomi diversi'
+      : incomplete > 0 ? `Mancano ${incomplete} rispost${incomplete === 1 ? 'a' : 'e'}`
+        : submitted ? 'Aggiorna' : 'Invia le mie risposte'),
     inRound && submitted && !editing && h('div', { class: 'center' },
       h('button', { class: 'small', onclick: () => { ui.editingGuesses = true; render(); } }, 'Cambia le mie scelte')),
     h('div', { class: 'panel' },
@@ -564,17 +596,22 @@ function renderSimultaneous(view, isHost) {
 function renderResults(view, isHost) {
   const last = view.roundNumber >= view.settings.rounds;
   const cards = view.cards.map((card) => {
-    let detail = null;
-    if (view.simul) {
-      const right = view.simul.correct[card.id] ?? [];
-      detail = right.length
-        ? `Indovinata da ${right.map((id) => nameOf(view, id)).join(', ')}`
-        : 'Nessuno l’ha indovinata';
+    const found = view.simul?.correct[card.id] ?? {};
+    let details = [];
+    if (view.simul && card.count === 1) {
+      const right = found[card.authors[0]] ?? [];
+      details = [right.length ? `Indovinata da ${joinNames(view, right)}` : 'Nessuno l’ha indovinata'];
+    } else if (view.simul) {
+      details = card.authors.map((id) => {
+        const right = found[id] ?? [];
+        return `Su ${nameOf(view, id)}: ${right.length ? `ci hanno preso ${joinNames(view, right)}` : 'nessuno ci ha preso'}`;
+      });
     }
     return answerCard(view, card, {
-      meta: [h('strong', null, nameOf(view, card.author)), detail && ` · ${detail}`],
+      meta: [h('strong', null, joinNames(view, card.authors)), details.map((d) => h('span', { class: 'line' }, d))],
     });
   });
+  const twins = view.cards.filter((card) => card.count > 1);
 
   const survivor = view.classic?.survivor;
   return [
@@ -582,6 +619,8 @@ function renderResults(view, isHost) {
     h('h2', { class: 'center' }, 'Ecco chi ha scritto cosa!'),
     survivor && h('div', { class: 'event good' },
       `Nessuno ha scoperto ${nameOf(view, survivor)}: +${SURVIVOR_BONUS} punti bonus!`),
+    twins.map((card) => h('div', { class: 'event' },
+      `Stessa testa! ${joinNames(view, card.authors)} hanno scritto «${card.text}».`)),
     h('div', { class: 'answers results' }, cards),
     h('div', { class: 'panel' },
       h('h3', null, 'Classifica'),

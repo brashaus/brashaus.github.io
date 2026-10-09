@@ -215,8 +215,14 @@ export class Game {
 
   startGuessing() {
     const r = this.s.round;
-    r.cards = shuffle(r.participants, this.rng)
-      .map((author, i) => ({ id: `c${i}`, author, text: r.answers[author] }));
+    // Answers that differ only in letter case become one card with several authors.
+    const byText = new Map();
+    for (const author of shuffle(r.participants, this.rng)) {
+      const key = r.answers[author].toLocaleLowerCase('it');
+      if (byText.has(key)) byText.get(key).authors.push(author);
+      else byText.set(key, { text: r.answers[author], authors: [author] });
+    }
+    r.cards = [...byText.values()].map((card, i) => ({ id: `c${i}`, ...card }));
     if (r.mode === 'classic') {
       const first = r.participants[(this.s.roundNumber - 1) % r.participants.length];
       r.classic = { turn: first, eliminated: [], log: [], survivor: null };
@@ -250,13 +256,13 @@ export class Game {
     const c = r.classic;
     if (pid !== c.turn) return fail('Non è il tuo turno.');
     const card = r.cards.find((x) => x.id === cardId);
-    if (!card || card.author === pid || c.eliminated.includes(card.author)) {
-      return fail('Scegli una risposta ancora in gioco (non la tua).');
-    }
+    // Your own card is fair game too if somebody else wrote the same thing.
+    const hidden = card?.authors.filter((a) => a !== pid && !c.eliminated.includes(a)) ?? [];
+    if (hidden.length === 0) return fail('Scegli una risposta con un autore ancora da scoprire.');
     if (!r.participants.includes(suspectId) || suspectId === pid || c.eliminated.includes(suspectId)) {
       return fail('Scegli un giocatore ancora in gioco.');
     }
-    const correct = card.author === suspectId;
+    const correct = card.authors.includes(suspectId);
     c.log.push({ guesser: pid, cardId, suspect: suspectId, correct });
     if (!correct) {
       c.turn = this.nextTurn(pid);
@@ -280,33 +286,40 @@ export class Game {
     if (!r.participants.includes(pid)) return fail('Non partecipi a questo round.');
     const clean = {};
     for (const card of r.cards) {
-      if (card.author === pid) continue;
-      const suspect = guesses?.[card.id];
-      if (!r.participants.includes(suspect) || suspect === pid) {
-        return fail('Assegna un autore a ogni risposta.');
-      }
-      clean[card.id] = suspect;
+      const needed = card.authors.filter((a) => a !== pid).length;
+      if (needed === 0) continue;
+      const picks = guesses?.[card.id];
+      const valid = Array.isArray(picks) && picks.length === needed && new Set(picks).size === needed
+        && picks.every((id) => id !== pid && r.participants.includes(id));
+      if (!valid) return fail('Assegna gli autori a ogni risposta.');
+      clean[card.id] = [...picks];
     }
     r.simul.guesses[pid] = clean;
     if (r.participants.every((id) => id in r.simul.guesses)) this.scoreSimultaneous();
     return OK;
   }
 
-  // +1 for every right guess; the author gets +1 for every player who got their answer wrong.
+  // For every author of every card: +1 to each player who named them,
+  // and +1 to the author for each player who did not.
+  // correct[cardId][authorId] lists who found that author.
   scoreSimultaneous() {
     const r = this.s.round;
     r.simul.correct = {};
     for (const card of r.cards) {
-      r.simul.correct[card.id] = [];
-      for (const [guesser, guesses] of Object.entries(r.simul.guesses)) {
-        if (guesser === card.author) continue;
-        if (guesses[card.id] === card.author) {
-          r.simul.correct[card.id].push(guesser);
-          this.award(guesser, 1);
-        } else {
-          this.award(card.author, 1);
+      const found = {};
+      for (const author of card.authors) {
+        found[author] = [];
+        for (const [guesser, guesses] of Object.entries(r.simul.guesses)) {
+          if (guesser === author) continue;
+          if (guesses[card.id]?.includes(author)) {
+            found[author].push(guesser);
+            this.award(guesser, 1);
+          } else {
+            this.award(author, 1);
+          }
         }
       }
+      r.simul.correct[card.id] = found;
     }
     this.s.phase = 'results';
   }
@@ -339,10 +352,14 @@ export class Game {
 
     const revealAll = s.phase !== 'guessing';
     const eliminated = r.classic?.eliminated ?? [];
-    view.cards = r.cards.map((c) => {
-      const shown = revealAll || c.author === pid || eliminated.includes(c.author);
-      return { id: c.id, text: c.text, mine: c.author === pid, author: shown ? c.author : null };
-    });
+    // `count` is public (a shared answer is a clue), `authors` only lists the ones already revealed to pid.
+    view.cards = r.cards.map((c) => ({
+      id: c.id,
+      text: c.text,
+      count: c.authors.length,
+      mine: c.authors.includes(pid),
+      authors: revealAll ? [...c.authors] : c.authors.filter((a) => a === pid || eliminated.includes(a)),
+    }));
     if (r.classic) {
       view.classic = {
         turn: r.classic.turn,
@@ -354,7 +371,7 @@ export class Game {
     if (r.simul) {
       view.simul = {
         submitted: Object.keys(r.simul.guesses),
-        myGuesses: r.simul.guesses[pid] ? { ...r.simul.guesses[pid] } : null,
+        myGuesses: r.simul.guesses[pid] ? clone(r.simul.guesses[pid]) : null,
       };
       if (revealAll) {
         view.simul.correct = r.simul.correct ? clone(r.simul.correct) : {};

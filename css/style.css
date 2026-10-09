@@ -241,6 +241,12 @@ button.small { padding: 6px 12px; font-size: 0.9rem; border-radius: 10px; }
 }
 .answer .text { display: block; overflow-wrap: anywhere; }
 .answer .meta { display: block; margin-top: 6px; font-size: 0.85rem; font-weight: 600; color: var(--muted); }
+.answer .shared {
+  display: inline-block; margin-bottom: 6px;
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 2px 8px;
+}
+.answer .meta .line { display: block; font-weight: 500; color: var(--muted); }
 .answer.mine { border-style: dashed; }
 .answer.revealed { background: var(--surface-2); }
 .answer.revealed .text { text-decoration: line-through; text-decoration-color: var(--accent); opacity: 0.7; }
