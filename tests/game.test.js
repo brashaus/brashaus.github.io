@@ -201,6 +201,65 @@ test('simultaneous: shared cards need one name per author and score per author',
   eq(g.s.round.simul.correct[shared], { a: ['c', 'd'], b: ['a', 'd'] });
 });
 
+test('transcript keeps finished rounds with author names', () => {
+  const g = setup('simultaneous', ['Anna', 'Bruno', 'Carla', 'Dario']);
+  g.handle('a', { type: 'settings', rounds: 3 });
+  g.handle('a', { type: 'start' });
+  const q1 = g.s.round.question;
+  answer(g, { a: 'Pizza', b: 'pizza', c: 'sushi', d: 'kebab' });
+  eq(g.transcript().rounds, [], 'nothing before the round ends');
+  g.handle('a', { type: 'forceAdvance' });
+  const t = g.transcript();
+  eq(t.rounds.length, 1);
+  eq(t.rounds[0].number, 1);
+  eq(t.rounds[0].question, q1);
+  const shared = t.rounds[0].answers.find((x) => x.authors.length === 2);
+  eq([...shared.authors].sort(), ['Anna', 'Bruno']);
+  eq(t.scores.length, 4);
+
+  // Kicking a player later keeps their name in the record.
+  g.handle('a', { type: 'kick', playerId: 'd' });
+  ok(g.transcript().rounds[0].answers.some((x) => x.authors.includes('Dario')));
+
+  // Ending mid-guessing keeps that round, ending mid-answering does not.
+  g.handle('a', { type: 'next' });
+  answer(g, { a: '1', b: '2', c: '3' });
+  g.handle('a', { type: 'endGame' });
+  eq(g.transcript().rounds.length, 2);
+  g.handle('a', { type: 'start' });
+  g.handle('a', { type: 'endGame' });
+  eq(g.transcript().rounds.length, 0, 'a new game starts a new transcript');
+});
+
+test('history is not part of player views', () => {
+  const g = setup('simultaneous');
+  g.handle('a', { type: 'start' });
+  answerAll(g);
+  g.handle('a', { type: 'forceAdvance' });
+  g.handle('a', { type: 'next' });
+  ok(!JSON.stringify(g.viewFor('b')).includes('history'));
+  eq(g.viewFor('b').cards, undefined, 'new round shows no old cards');
+});
+
+test('start does not wipe scores or history when players are missing', () => {
+  const g = setup('simultaneous');
+  g.handle('a', { type: 'start' });
+  answerAll(g);
+  g.handle('a', { type: 'forceAdvance' });
+  g.handle('a', { type: 'endGame' });
+  const before = g.transcript();
+  g.disconnect('c');
+  ok(g.handle('a', { type: 'start' }).error);
+  eq(g.transcript(), before);
+});
+
+test('states saved before history existed still load', () => {
+  const g = setup();
+  delete g.s.history;
+  const g2 = new Game(JSON.parse(JSON.stringify(g.s)), { questions: g.questions });
+  eq(g2.transcript().rounds, []);
+});
+
 test('forceAdvance drops players who did not answer', () => {
   const g = setup('classic', ['Anna', 'Bruno', 'Carla', 'Dario']);
   g.handle('a', { type: 'start' });

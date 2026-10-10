@@ -362,8 +362,10 @@ function renderLobby(view, isHost) {
         }, String(n)))),
     ),
     isHost
-      ? h('button', { class: 'primary big', disabled: missing > 0, onclick: () => dispatch({ type: 'start' }) },
-        missing > 0 ? `Mancano ${missing} giocator${missing === 1 ? 'e' : 'i'}` : 'Inizia la partita!')
+      ? h('div', { class: 'stack' },
+        h('button', { class: 'primary big', disabled: missing > 0, onclick: startNewGame },
+          missing > 0 ? `Mancano ${missing} giocator${missing === 1 ? 'e' : 'i'}` : 'Inizia la partita!'),
+        h('div', { class: 'center' }, downloadButton('small')))
       : h('p', { class: 'center muted' }, 'In attesa che l’host avvii la partita…'),
   ];
 }
@@ -631,10 +633,58 @@ function renderResults(view, isHost) {
       }),
     ),
     isHost
-      ? h('button', { class: 'primary big', onclick: () => dispatch({ type: 'next' }) },
-        last ? 'Classifica finale' : 'Prossimo round →')
+      ? h('div', { class: 'stack' },
+        h('button', { class: 'primary big', onclick: () => dispatch({ type: 'next' }) },
+          last ? 'Classifica finale' : 'Prossimo round →'),
+        h('div', { class: 'center' }, downloadButton('small')))
       : h('p', { class: 'center muted' }, 'In attesa dell’host…'),
   ];
+}
+
+// --- Host download -------------------------------------------------------------------------------
+
+let downloadedRounds = 0; // rounds already saved by the host in this game
+
+function transcriptRounds() {
+  return app.isHost ? app.session?.game.transcript().rounds.length ?? 0 : 0;
+}
+
+function downloadTranscript() {
+  const { rounds, scores } = app.session.game.transcript();
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const join = (names) => (names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} e ${names.at(-1)}`);
+  const lines = [`${APP_NAME}, partita del ${now.toLocaleDateString('it-IT')}`, ''];
+  for (const r of rounds) {
+    lines.push(`Round ${r.number}: ${r.question}`);
+    for (const a of r.answers) lines.push(`  - ${a.text} (${join(a.authors)})`);
+    lines.push('');
+  }
+  lines.push('Classifica');
+  scores.forEach((p, i) => lines.push(`  ${i + 1}. ${p.name}: ${p.score} punt${p.score === 1 ? 'o' : 'i'}`));
+
+  const blob = new Blob([`${lines.join('\n')}\n`], { type: 'text/plain;charset=utf-8' });
+  const link = h('a', {
+    href: URL.createObjectURL(blob),
+    download: `brashaus-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.txt`,
+  });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  downloadedRounds = rounds.length;
+}
+
+function downloadButton(cls = 'big') {
+  return transcriptRounds() > 0 && h('button', { class: cls, onclick: downloadTranscript }, 'Scarica domande e risposte');
+}
+
+// A new game wipes the transcript: ask first if the host has not saved it yet.
+function startNewGame() {
+  const unsaved = transcriptRounds() > downloadedRounds;
+  if (unsaved && !confirm('Domande e risposte di questa partita andranno perse. Iniziare lo stesso?')) return;
+  downloadedRounds = 0;
+  dispatch({ type: 'start' });
 }
 
 function renderEnd(view, isHost) {
@@ -654,7 +704,8 @@ function renderEnd(view, isHost) {
     ),
     isHost
       ? h('div', { class: 'stack' },
-        h('button', { class: 'primary big', onclick: () => dispatch({ type: 'start' }) }, 'Gioca ancora'),
+        downloadButton(),
+        h('button', { class: 'primary big', onclick: startNewGame }, 'Gioca ancora'),
         h('button', { class: 'big', onclick: () => dispatch({ type: 'backToLobby' }) }, 'Torna alla lobby'))
       : h('p', { class: 'center muted' }, 'In attesa dell’host…'),
   ];

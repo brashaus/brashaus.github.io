@@ -28,6 +28,7 @@ function shuffle(list, rng) {
 export class Game {
   constructor(state, { questions, rng = Math.random }) {
     this.s = state;
+    this.s.history ??= []; // states saved before history existed
     this.questions = questions;
     this.rng = rng;
   }
@@ -41,6 +42,7 @@ export class Game {
       deck: [],
       roundNumber: 0,
       round: null,
+      history: [], // finished rounds, for the host's download
     }, opts);
     game.join(hostId, hostName);
     return game;
@@ -83,15 +85,19 @@ export class Game {
       case 'start':
         return hostOnly(() => {
           if (phase !== 'lobby' && phase !== 'end') return fail('La partita è già iniziata.');
+          if (this.s.players.filter((p) => p.connected).length < MIN_PLAYERS) {
+            return fail(`Servono almeno ${MIN_PLAYERS} giocatori connessi.`);
+          }
           for (const p of this.s.players) p.score = 0;
           this.s.roundNumber = 0;
+          this.s.history = [];
           return this.startRound();
         });
       case 'next':
         return hostOnly(() => {
           if (phase !== 'results') return fail('Il round non è ancora finito.');
           if (this.s.roundNumber >= this.s.settings.rounds) {
-            this.s.phase = 'end';
+            this.finishRound('end');
             return OK;
           }
           return this.startRound();
@@ -99,7 +105,7 @@ export class Game {
       case 'endGame':
         return hostOnly(() => {
           if (phase === 'lobby') return fail('La partita non è ancora iniziata.');
-          this.s.phase = 'end';
+          this.finishRound('end');
           return OK;
         });
       case 'backToLobby':
@@ -275,7 +281,7 @@ export class Game {
     if (alive.length <= 1) {
       c.survivor = alive[0] ?? null;
       if (c.survivor) this.award(c.survivor, SURVIVOR_BONUS);
-      this.s.phase = 'results';
+      this.finishRound();
     }
     return OK;
   }
@@ -321,7 +327,29 @@ export class Game {
       }
       r.simul.correct[card.id] = found;
     }
-    this.s.phase = 'results';
+    this.finishRound();
+  }
+
+  // Ends the round and archives it. A game ended mid-round keeps that round only if answers were in.
+  finishRound(phase = 'results') {
+    const r = this.s.round;
+    if (r?.cards && !r.archived) {
+      r.archived = true;
+      this.s.history.push({
+        number: this.s.roundNumber,
+        question: r.question,
+        answers: r.cards.map((c) => ({ text: c.text, authors: c.authors.map((id) => this.player(id)?.name ?? '?') })),
+      });
+    }
+    this.s.phase = phase;
+  }
+
+  // Every finished round with its authors, plus the scores. Host only: it reveals everything.
+  transcript() {
+    return {
+      rounds: clone(this.s.history),
+      scores: [...this.s.players].sort((a, b) => b.score - a.score).map(({ name, score }) => ({ name, score })),
+    };
   }
 
   // What one player is allowed to see. Authors stay hidden until they are revealed.

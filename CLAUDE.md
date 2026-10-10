@@ -34,6 +34,8 @@ UI language: Italian.
   - Classica: each right guess reveals one author; the card stays in play until all are found.
     A co-author may guess on their own shared card.
   - Simultanea: one name per author (co-authors name the others); scoring is per author as above.
+- The host can download a .txt of the game (questions, answers with authors, scores) from results, end and lobby.
+  Finished rounds are archived in `state.history` (host only, never in player views); a new game clears it.
 - Host picks the number of rounds (3/5/8/10). Questions come from `js/questions.js`, no repeats until the deck runs out.
 - Name: Brashaus, an in-joke of ours, don't change it (`APP_NAME` in `js/app.js`, PeerJS id prefix in `js/transport.js`, storage keys `bh.*`).
 
